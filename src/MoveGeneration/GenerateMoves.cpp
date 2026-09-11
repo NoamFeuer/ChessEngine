@@ -2,431 +2,449 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <cassert>
 
-#include "PMD.h"
+#include "AttackTables.h"
+#include "Magics.h"
 #include "../Position/Piece.h"
 
 namespace moveGeneration {
-   static_assert(sizeof(position::Move) == 4, "Move must be packed into 4 bytes");
+    static_assert(sizeof(position::Move) == 4, "Move must be packed into 4 bytes");
 
-   position::Move MoveGenerator::moveBuffer[256];
-   int MoveGenerator::moveCount{};
-   int MoveGenerator::friendlyColor{};
-   int MoveGenerator::oppositeColor{};
+    position::Move MoveGenerator::moveBuffer[256]{};
+    int MoveGenerator::moveCount{};
+    int MoveGenerator::friendlyColor{};
+    int MoveGenerator::oppositeColor{};
+    position::Bitboard MoveGenerator::friendlyBB{};
+    position::Bitboard MoveGenerator::oppositeBB{};
 
-   std::vector<position::Move> MoveGenerator::generatePseudoLegalMoves(const position::Position& pos) {
-      position::Move moves[256];
-      int n = generatePseudoLegalMoves(pos, moves);
-      return std::vector<position::Move>(moves, moves + n);
-   }
+    static position::Bitboard rankMaskBB(int rank) { return 0xFFull << (rank * 8); }
+    static position::Bitboard fileMaskBB(int file) { return 0x0101010101010101ull << file; }
+    static const position::Bitboard FILE_A_MASK = 0x0101010101010101ull;
+    static const position::Bitboard FILE_H_MASK = 0x8080808080808080ull;
 
-   int MoveGenerator::generatePseudoLegalMoves(const position::Position& pos, position::Move* outMoves) {
-      moveCount = 0;
-      friendlyColor = (pos.turn()) ? position::Piece::WHITE : position::Piece::BLACK;
-      oppositeColor = (pos.turn()) ? position::Piece::BLACK : position::Piece::WHITE;
+    static int colorIndex(int color) {
+        return color == position::Piece::WHITE ? position::WHITE_INDEX : position::BLACK_INDEX;
+    }
 
-      for (int i = 0; i < 64; i++) {
-         int piece = pos.squares[i];
-         if (piece == position::Piece::NONE) continue;
-         if (!position::Piece::isColor(piece, friendlyColor)) continue;
+    static int pieceOn(const position::Position& pos, int sq) {
+        position::Bitboard b = position::bitBoardOf(sq);
+        int colorMask = (b & pos.byColor[position::WHITE_INDEX]) ? position::Piece::WHITE : position::Piece::BLACK;
+        for (int t = position::Piece::PAWN; t <= position::Piece::KING; t++) {
+            if (b & pos.byType[t]) return colorMask + t;
+        }
+        return 0;
+    }
 
-         int type = position::Piece::getPieceType(piece);
-         if (type == position::Piece::BISHOP ||
-             type == position::Piece::ROOK ||
-             type == position::Piece::QUEEN) {
-            generateSlidingMoves(pos, i, piece);
-         }
-      }
+    std::vector<position::Move> MoveGenerator::generatePseudoLegalMoves(const position::Position& pos) {
+        position::Move moves[256];
+        int n = generatePseudoLegalMoves(pos, moves);
+        return std::vector<position::Move>(moves, moves + n);
+    }
 
-      generatePawnMoves(pos);
-      generateKnightMoves(pos);
-      generateKingMoves(pos);
-      generateCastlingMoves(pos);
+    int MoveGenerator::generatePseudoLegalMoves(const position::Position& pos, position::Move* outMoves) {
+        ensureAttackTablesInit();
+        moveCount = 0;
+        friendlyColor = pos.turn() ? position::Piece::WHITE : position::Piece::BLACK;
+        oppositeColor = pos.turn() ? position::Piece::BLACK : position::Piece::WHITE;
+        friendlyBB = pos.byColor[colorIndex(friendlyColor)];
+        oppositeBB = pos.byColor[colorIndex(oppositeColor)];
 
-      std::memcpy(outMoves, moveBuffer, moveCount * sizeof(position::Move));
-      return moveCount;
-   }
+        generatePawnMoves(pos);
+        generateKnightMoves(pos);
+        generateKingMoves(pos);
+        generateCastlingMoves(pos);
 
-   std::vector<position::Move> MoveGenerator::generateLegalMoves(const position::Position& pos) {
-      position::Move moves[256];
-      position::Position work(pos);
-      int n = generateLegalMoves(work, moves);
-      return std::vector<position::Move>(moves, moves + n);
-   }
+        for (int i = 0; i < 64; i++) {
+            position::Bitboard b = position::bitBoardOf(i);
+            if ((b & friendlyBB) == 0) continue;
 
-   int MoveGenerator::generateLegalMoves(position::Position& pos, position::Move* outMoves) {
-      position::Move pseudo[256];
-      int pseudoCount = generatePseudoLegalMoves(pos, pseudo);
+            for (int t : {position::Piece::BISHOP, position::Piece::ROOK, position::Piece::QUEEN}) {
+                if (b & pos.byType[t])
+                    generateSlidingMoves(pos, i, t);
+            }
+        }
 
-      if (pos.whiteKingSquare < 0 || pos.blackKingSquare < 0) return 0;
+        std::memcpy(outMoves, moveBuffer, moveCount * sizeof(position::Move));
+        return moveCount;
+    }
 
-      int legalCount = 0;
-      for (int i = 0; i < pseudoCount; i++) {
-         const position::Move& mv = pseudo[i];
-         if (mv.castle()) {
-            int ks = friendlyColor == position::Piece::WHITE ? pos.whiteKingSquare : pos.blackKingSquare;
-            if (isSquareAttacked(pos, ks, oppositeColor)) continue;
+    std::vector<position::Move> MoveGenerator::generateLegalMoves(const position::Position& pos) {
+        position::Move moves[256];
+        position::Position work(pos);
+        int n = generateLegalMoves(work, moves);
+        return std::vector<position::Move>(moves, moves + n);
+    }
 
-            bool kingSide = (mv.toSquare() % 8) == 6;
-            int throughSquare = kingSide ? ks + 1 : ks - 1;
-            int destSquare = kingSide ? ks + 2 : ks - 2;
-            if (isSquareAttacked(pos, throughSquare, oppositeColor)) continue;
-            if (isSquareAttacked(pos, destSquare, oppositeColor)) continue;
-         }
+    int MoveGenerator::generateLegalMoves(position::Position& pos, position::Move* outMoves) {
+        position::Move pseudo[256];
+        int pseudoCount = generatePseudoLegalMoves(pos, pseudo);
 
-         if (mv.toSquare() == pos.whiteKingSquare || mv.toSquare() == pos.blackKingSquare) continue;
+        int friendlyIdx = colorIndex(friendlyColor);
+        int oppositeIdx = colorIndex(oppositeColor);
 
-         UndoInfo undo;
-         makeMove(pos, mv, undo);
-         int ks = friendlyColor == position::Piece::WHITE ? pos.whiteKingSquare : pos.blackKingSquare;
-         bool legal = !isSquareAttacked(pos, ks, oppositeColor);
-         unmakeMove(pos, mv, undo);
+        if (!(pos.byColor[friendlyIdx] & pos.byType[position::Piece::KING])) return 0;
+        if (!(pos.byColor[oppositeIdx] & pos.byType[position::Piece::KING])) return 0;
 
-         if (legal) outMoves[legalCount++] = mv;
-      }
+        int legalCount = 0;
+        for (int i = 0; i < pseudoCount; i++) {
+            const position::Move& mv = pseudo[i];
 
-      return legalCount;
-   }
+            if (mv.castle()) {
+                int ks = pos.kingSquare(friendlyIdx);
+                bool kingSide = (mv.toSquare() % 8) == 6;
+                int through = kingSide ? ks + 1 : ks - 1;
+                int dest = kingSide ? ks + 2 : ks - 2;
 
-   std::uint64_t MoveGenerator::perft(position::Position& pos, int depth) {
-      if (depth <= 1) {
-         position::Move moves[256];
-         return generateLegalMoves(pos, moves);
-      }
+                if (isSquareAttacked(pos, ks, oppositeColor)) continue;
+                if (isSquareAttacked(pos, through, oppositeColor)) continue;
+                if (isSquareAttacked(pos, dest, oppositeColor)) continue;
+            }
 
-      position::Move moves[256];
-      int count = generateLegalMoves(pos, moves);
+            int enemyKing = pos.kingSquare(oppositeIdx);
+            if (mv.toSquare() == enemyKing) continue;
 
-      std::uint64_t nodes = 0;
-      for (int i = 0; i < count; i++) {
-         UndoInfo undo;
-         makeMove(pos, moves[i], undo);
-         nodes += perft(pos, depth - 1);
-         unmakeMove(pos, moves[i], undo);
-      }
+            UndoInfo undo;
+            makeMove(pos, mv, undo);
+            int king = pos.kingSquare(friendlyIdx);
+            bool legal = !isSquareAttacked(pos, king, oppositeColor);
+            unmakeMove(pos, mv, undo);
 
-      return nodes;
-   }
+            if (legal) outMoves[legalCount++] = mv;
+        }
 
-   void MoveGenerator::makeMove(position::Position& pos, const position::Move& move, UndoInfo& undo) {
-      undo.movedPiece = pos.squares[move.fromSquare()];
-      undo.capturedPiece = pos.squares[move.toSquare()];
-      undo.enPassantSquare = pos.enPassantSquare;
-      undo.castlingRights = pos.castlingRights;
+        return legalCount;
+    }
 
-      int color = position::Piece::getPieceColor(undo.movedPiece);
-      int type  = position::Piece::getPieceType(undo.movedPiece);
+    std::uint64_t MoveGenerator::perft(position::Position& pos, int depth) {
+        if (depth <= 1) {
+            position::Move moves[256];
+            return generateLegalMoves(pos, moves);
+        }
 
-      pos.squares[move.toSquare()] = undo.movedPiece;
-      pos.squares[move.fromSquare()] = position::Piece::NONE;
+        position::Move moves[256];
+        int count = generateLegalMoves(pos, moves);
 
-      if (move.enPassant()) {
-         int capturedPawnSquare = move.toSquare() + ((color == position::Piece::WHITE) ? 8 : -8);
-         undo.capturedPiece = pos.squares[capturedPawnSquare];
-         pos.squares[capturedPawnSquare] = position::Piece::NONE;
-      }
+        std::uint64_t nodes = 0;
+        for (int i = 0; i < count; i++) {
+            UndoInfo undo;
+            makeMove(pos, moves[i], undo);
+            nodes += perft(pos, depth - 1);
+            unmakeMove(pos, moves[i], undo);
+        }
 
-      if (move.promotion() != position::Piece::NONE) {
-         pos.squares[move.toSquare()] = color + move.promotion();
-      }
+        return nodes;
+    }
 
-      if (move.castle()) {
-         if (move.toSquare() % 8 == 6) {
-            pos.squares[move.toSquare() - 1] = color + position::Piece::ROOK;
-            pos.squares[move.toSquare() + 1] = position::Piece::NONE;
-         } else {
-            pos.squares[move.toSquare() + 1] = color + position::Piece::ROOK;
-            pos.squares[move.toSquare() - 2] = position::Piece::NONE;
-         }
-      }
+    void MoveGenerator::makeMove(position::Position& pos, const position::Move& move, UndoInfo& undo) {
+        int from = move.fromSquare();
+        int to = move.toSquare();
+        position::Bitboard fromBBb = position::bitBoardOf(from);
+        position::Bitboard toBBb = position::bitBoardOf(to);
 
-      if (type == position::Piece::PAWN && std::abs(move.toSquare() - move.fromSquare()) == 16) {
-         pos.enPassantSquare = move.fromSquare() + ((color == position::Piece::WHITE) ? -8 : 8);
-      } else {
-         pos.enPassantSquare = -1;
-      }
+        undo.movedPiece = pieceOn(pos, from);
+        undo.capturedPiece = (toBBb & (pos.byColor[0] | pos.byColor[1])) ? pieceOn(pos, to) : 0;
+        undo.enPassantSquare = pos.enPassantSquare;
+        undo.castlingRights = pos.castlingRights;
 
-      if (type == position::Piece::KING) {
-         if (color == position::Piece::WHITE) {
-            pos.castlingRights &= ~(position::Position::WHITE_KINGSIDE | position::Position::WHITE_QUEENSIDE);
-         } else {
-            pos.castlingRights &= ~(position::Position::BLACK_KINGSIDE | position::Position::BLACK_QUEENSIDE);
-         }
-      }
+        int color = position::Piece::getPieceColor(undo.movedPiece);
+        int type = position::Piece::getPieceType(undo.movedPiece);
+        int colorIdx = colorIndex(color);
 
-      if (move.fromSquare() == 56 || move.toSquare() == 56) pos.castlingRights &= ~position::Position::WHITE_QUEENSIDE;
-      if (move.fromSquare() == 63 || move.toSquare() == 63) pos.castlingRights &= ~position::Position::WHITE_KINGSIDE;
-      if (move.fromSquare() == 0  || move.toSquare() == 0)  pos.castlingRights &= ~position::Position::BLACK_QUEENSIDE;
-      if (move.fromSquare() == 7  || move.toSquare() == 7)  pos.castlingRights &= ~position::Position::BLACK_KINGSIDE;
-
-      if (type == position::Piece::KING) {
-         if (color == position::Piece::WHITE) pos.whiteKingSquare = move.toSquare();
-         else pos.blackKingSquare = move.toSquare();
-      }
-
-      pos.flipTurn();
-   }
-
-   void MoveGenerator::unmakeMove(position::Position& pos, const position::Move& move, const UndoInfo& undo) {
-      int color = position::Piece::getPieceColor(undo.movedPiece);
-      int type  = position::Piece::getPieceType(undo.movedPiece);
-
-      pos.squares[move.fromSquare()] = undo.movedPiece;
-
-      if (move.castle()) {
-         if (move.toSquare() % 8 == 6) {
-            pos.squares[move.toSquare() - 1] = position::Piece::NONE;
-            pos.squares[move.toSquare() + 1] = color + position::Piece::ROOK;
-         } else {
-            pos.squares[move.toSquare() + 1] = position::Piece::NONE;
-            pos.squares[move.toSquare() - 2] = color + position::Piece::ROOK;
-         }
-      }
-
-      pos.squares[move.toSquare()] = undo.capturedPiece;
-
-      if (move.enPassant()) {
-         int capturedPawnSquare = move.toSquare() + ((color == position::Piece::WHITE) ? 8 : -8);
-         pos.squares[capturedPawnSquare] = undo.capturedPiece;
-         pos.squares[move.toSquare()] = position::Piece::NONE;
-      }
-
-      if (type == position::Piece::KING) {
-         if (color == position::Piece::WHITE) pos.whiteKingSquare = move.fromSquare();
-         else pos.blackKingSquare = move.fromSquare();
-      }
-
-      if (position::Piece::getPieceType(undo.capturedPiece) == position::Piece::KING) {
-         if (position::Piece::getPieceColor(undo.capturedPiece) == position::Piece::WHITE) {
-            pos.whiteKingSquare = move.toSquare();
-         } else {
-            pos.blackKingSquare = move.toSquare();
-         }
-      }
-
-      pos.enPassantSquare = undo.enPassantSquare;
-      pos.castlingRights = undo.castlingRights;
-      pos.flipTurn();
-   }
-
-   void MoveGenerator::applyMove(position::Position& pos, const position::Move& move) {
-      UndoInfo discard;
-      makeMove(pos, move, discard);
-   }
-
-   void MoveGenerator::generateSlidingMoves(const position::Position& pos, int startSquare, int piece) {
-      int startDirIndex = position::Piece::isType(piece, position::Piece::BISHOP) ? 4 : 0;
-      int endDirIndex = position::Piece::isType(piece, position::Piece::ROOK)   ? 4 : 8;
-
-      for (int directionIndex = startDirIndex; directionIndex < endDirIndex; directionIndex++) {
-         for (int n = 0; n < PMD::numSquaresToEdge[startSquare][directionIndex]; n++) {
-            int targetSquare = startSquare + PMD::directionOffsets[directionIndex] * (n + 1);
-            int pieceOnTargetSquare = pos.squares[targetSquare];
-
-            if (position::Piece::isColor(pieceOnTargetSquare, friendlyColor)) break;
-
-            moveBuffer[moveCount++] = position::Move(startSquare, targetSquare);
-            if (pieceOnTargetSquare != position::Piece::NONE) moveBuffer[moveCount - 1].setCapture();
-
-            if (position::Piece::isColor(pieceOnTargetSquare, oppositeColor)) break;
-         }
-      }
-   }
-
-   void MoveGenerator::generatePawnMoves(const position::Position& pos) {
-      bool white = (friendlyColor == position::Piece::WHITE);
-      int forward = white ? -8 : 8;
-      int startRank = white ? 6 : 1;
-      int promoRank = white ? 1 : 6;
-
-      for (int i = 0; i < 64; i++) {
-         int piece = pos.squares[i];
-         if (!position::Piece::isType(piece, position::Piece::PAWN)) continue;
-         if (!position::Piece::isColor(piece, friendlyColor)) continue;
-
-         int rank = i / 8;
-         int file = i % 8;
-
-         int oneStep = i + forward;
-         if (oneStep >= 0 && oneStep < 64 && pos.squares[oneStep] == position::Piece::NONE) {
-            if (rank == promoRank) {
-               moveBuffer[moveCount++] = position::Move(i, oneStep, false, false, position::Piece::QUEEN);
-               moveBuffer[moveCount++] = position::Move(i, oneStep, false, false, position::Piece::ROOK);
-               moveBuffer[moveCount++] = position::Move(i, oneStep, false, false, position::Piece::BISHOP);
-               moveBuffer[moveCount++] = position::Move(i, oneStep, false, false, position::Piece::KNIGHT);
+        if (move.capture()) {
+            if (move.enPassant()) {
+                int capturedSq = to + (color == position::Piece::WHITE ? -8 : +8);
+                position::Bitboard cBBb = position::bitBoardOf(capturedSq);
+                undo.capturedPiece = pieceOn(pos, capturedSq);
+                pos.byColor[1 - colorIdx] ^= cBBb;
+                pos.byType[position::Piece::PAWN] ^= cBBb;
             } else {
-               moveBuffer[moveCount++] = position::Move(i, oneStep);
+                int cType = position::Piece::getPieceType(undo.capturedPiece);
+                pos.byColor[1 - colorIdx] ^= toBBb;
+                pos.byType[cType] ^= toBBb;
+            }
+        }
+
+        pos.byColor[colorIdx] ^= fromBBb | toBBb;
+        pos.byType[type] ^= fromBBb | toBBb;
+
+        if (move.promotion() != position::Piece::NONE) {
+            pos.byType[position::Piece::PAWN] ^= toBBb;
+            pos.byType[move.promotion()] ^= toBBb;
+        }
+
+        if (move.castle()) {
+            position::Bitboard rookToggle;
+            if (to % 8 == 6) {
+                rookToggle = position::bitBoardOf(to - 1) ^ position::bitBoardOf(to + 1);
+            } else {
+                rookToggle = position::bitBoardOf(to + 1) ^ position::bitBoardOf(to - 2);
+            }
+            pos.byType[position::Piece::ROOK] ^= rookToggle;
+            pos.byColor[colorIdx] ^= rookToggle;
+        }
+
+        if (type == position::Piece::PAWN && std::abs(to - from) == 16) {
+            pos.enPassantSquare = from + (color == position::Piece::WHITE ? +8 : -8);
+        } else {
+            pos.enPassantSquare = -1;
+        }
+
+        if (type == position::Piece::KING) {
+            if (color == position::Piece::WHITE) {
+                pos.castlingRights &= ~(position::Position::WHITE_KINGSIDE | position::Position::WHITE_QUEENSIDE);
+            } else {
+                pos.castlingRights &= ~(position::Position::BLACK_KINGSIDE | position::Position::BLACK_QUEENSIDE);
+            }
+        }
+
+        if (from == 0 || to == 0)   pos.castlingRights &= ~position::Position::WHITE_QUEENSIDE;
+        if (from == 7 || to == 7)   pos.castlingRights &= ~position::Position::WHITE_KINGSIDE;
+        if (from == 56 || to == 56) pos.castlingRights &= ~position::Position::BLACK_QUEENSIDE;
+        if (from == 63 || to == 63) pos.castlingRights &= ~position::Position::BLACK_KINGSIDE;
+
+        pos.flipTurn();
+    }
+
+    void MoveGenerator::unmakeMove(position::Position& pos, const position::Move& move, const UndoInfo& undo) {
+        int from = move.fromSquare();
+        int to = move.toSquare();
+        position::Bitboard fromBBb = position::bitBoardOf(from);
+        position::Bitboard toBBb = position::bitBoardOf(to);
+
+        int color = position::Piece::getPieceColor(undo.movedPiece);
+        int type = position::Piece::getPieceType(undo.movedPiece);
+        int colorIdx = colorIndex(color);
+
+        // Undo promotion first so byType[PAWN] is fully restored before
+        // the captured piece with the same type is put back on `to`.
+        if (move.promotion() != position::Piece::NONE) {
+            pos.byType[position::Piece::PAWN] ^= toBBb;
+            pos.byType[move.promotion()] ^= toBBb;
+        }
+
+        pos.byColor[colorIdx] ^= fromBBb | toBBb;
+        pos.byType[type] ^= fromBBb | toBBb;
+
+        if (move.castle()) {
+            position::Bitboard rookToggle;
+            if (to % 8 == 6) {
+                rookToggle = position::bitBoardOf(to - 1) ^ position::bitBoardOf(to + 1);
+            } else {
+                rookToggle = position::bitBoardOf(to + 1) ^ position::bitBoardOf(to - 2);
+            }
+            pos.byType[position::Piece::ROOK] ^= rookToggle;
+            pos.byColor[colorIdx] ^= rookToggle;
+        }
+
+        if (move.enPassant()) {
+            int capturedSq = to + (color == position::Piece::WHITE ? -8 : +8);
+            position::Bitboard cBBb = position::bitBoardOf(capturedSq);
+            pos.byColor[1 - colorIdx] |= cBBb;
+            pos.byType[position::Piece::PAWN] |= cBBb;
+        } else if (undo.capturedPiece) {
+            int cType = position::Piece::getPieceType(undo.capturedPiece);
+            pos.byColor[1 - colorIdx] |= toBBb;
+            pos.byType[cType] |= toBBb;
+        }
+
+        pos.enPassantSquare = undo.enPassantSquare;
+        pos.castlingRights = undo.castlingRights;
+        pos.flipTurn();
+    }
+
+    void MoveGenerator::applyMove(position::Position& pos, const position::Move& move) {
+        UndoInfo discard;
+        makeMove(pos, move, discard);
+    }
+
+    void MoveGenerator::generateSlidingMoves(const position::Position& pos, int startSquare, int piece) {
+        position::Bitboard occ = pos.byColor[0] | pos.byColor[1];
+        position::Bitboard targets;
+
+        if (piece == position::Piece::BISHOP)       targets = Magics::bishopAttacks(startSquare, occ);
+        else if (piece == position::Piece::ROOK)    targets = Magics::rookAttacks(startSquare, occ);
+        else                                        targets = Magics::queenAttacks(startSquare, occ);
+
+        targets &= ~friendlyBB;
+        emitMovesFromBitboard(targets, startSquare);
+    }
+
+    void MoveGenerator::addPromoMoves(int from, int to, bool capture) {
+        for (int promo : {position::Piece::QUEEN, position::Piece::ROOK,
+                          position::Piece::BISHOP, position::Piece::KNIGHT}) {
+            position::Move& m = moveBuffer[moveCount++];
+            m = position::Move(from, to, false, false, promo);
+            if (capture) m.setCapture();
+        }
+    }
+
+    void MoveGenerator::generatePawnMoves(const position::Position& pos) {
+        position::Bitboard pawns = friendlyBB & pos.byType[position::Piece::PAWN];
+        if (!pawns) return;
+
+        bool white = friendlyColor == position::Piece::WHITE;
+        position::Bitboard occ = pos.byColor[0] | pos.byColor[1];
+        position::Bitboard empty = ~occ;
+        position::Bitboard promoRank = white ? rankMaskBB(7) : rankMaskBB(0);
+        position::Bitboard startRank = white ? rankMaskBB(1) : rankMaskBB(6);
+
+        int forward = white ? 8 : -8;
+
+        // Single pushes
+        position::Bitboard singlePush = white ? (pawns << 8) : (pawns >> 8);
+        singlePush &= empty;
+
+        // Promotion pushes
+        position::Bitboard promoPush = singlePush & promoRank;
+        while (promoPush) {
+            int to = position::popLsbIndex(promoPush);
+            addPromoMoves(to - forward, to, false);
+        }
+
+        // Quiet pushes
+        position::Bitboard quietPush = singlePush & ~promoRank;
+        while (quietPush) {
+            int to = position::popLsbIndex(quietPush);
+            moveBuffer[moveCount++] = position::Move(to - forward, to);
+        }
+
+        // Double pushes (must also verify the intermediate square is empty)
+        position::Bitboard doublePush = white ? ((pawns & startRank) << 16) : ((pawns & startRank) >> 16);
+        doublePush &= empty & (white ? (singlePush << 8) : (singlePush >> 8));
+        while (doublePush) {
+            int to = position::popLsbIndex(doublePush);
+            moveBuffer[moveCount++] = position::Move(to - 2 * forward, to);
+        }
+
+        // En passant
+        if (pos.enPassantSquare != -1) {
+            position::Bitboard epBack = position::bitBoardOf(pos.enPassantSquare - forward);
+            if (oppositeBB & pos.byType[position::Piece::PAWN] & epBack) {
+                position::Bitboard epBit = position::bitBoardOf(pos.enPassantSquare);
+                position::Bitboard movers = pawns;
+                int ci = colorIndex(friendlyColor);
+                while (movers) {
+                    int sq = position::popLsbIndex(movers);
+                    if (AttackTables::pawnAttacks[ci][sq] & epBit) {
+                        position::Move& m = moveBuffer[moveCount++];
+                        m = position::Move(sq, pos.enPassantSquare, false, true);
+                        m.setCapture();
+                    }
+                }
+            }
+        }
+
+        // Captures
+        position::Bitboard capPawns = pawns;
+        int ci = colorIndex(friendlyColor);
+        while (capPawns) {
+            int sq = position::popLsbIndex(capPawns);
+
+            position::Bitboard caps = AttackTables::pawnAttacks[ci][sq] & oppositeBB;
+            position::Bitboard promoCap = caps & promoRank;
+            position::Bitboard quietCap = caps & ~promoRank;
+
+            while (promoCap) {
+                int to = position::popLsbIndex(promoCap);
+                addPromoMoves(sq, to, true);
             }
 
-            int twoStep = i + 2 * forward;
-            if (rank == startRank && pos.squares[twoStep] == position::Piece::NONE) {
-               moveBuffer[moveCount++] = position::Move(i, twoStep);
+            while (quietCap) {
+                int to = position::popLsbIndex(quietCap);
+                position::Move& m = moveBuffer[moveCount++];
+                m = position::Move(sq, to);
+                m.setCapture();
             }
-         }
+        }
+    }
 
-         int captureOffsets[2] = { forward - 1, forward + 1 };
-         int captureFiles[2] = { file - 1, file + 1 };
-         for (int c = 0; c < 2; c++) {
-            if (captureFiles[c] < 0 || captureFiles[c] > 7) continue;
+    void MoveGenerator::generateKnightMoves(const position::Position& pos) {
+        position::Bitboard knights = friendlyBB & pos.byType[position::Piece::KNIGHT];
+        while (knights) {
+            int sq = position::popLsbIndex(knights);
+            position::Bitboard targets = AttackTables::knightAttacks[sq] & ~friendlyBB;
+            emitMovesFromBitboard(targets, sq);
+        }
+    }
 
-            int target = i + captureOffsets[c];
-            int targetPiece = pos.squares[target];
-            bool isCapture = position::Piece::isColor(targetPiece, oppositeColor);
-            bool isEp = (target == pos.enPassantSquare);
+    void MoveGenerator::generateKingMoves(const position::Position& pos) {
+        position::Bitboard kings = friendlyBB & pos.byType[position::Piece::KING];
+        if (!kings) return;
+        int sq = position::lsb(kings);
+        position::Bitboard targets = AttackTables::kingAttacks[sq] & ~friendlyBB;
+        emitMovesFromBitboard(targets, sq);
+    }
 
-            if (isCapture || isEp) {
-               if (rank == promoRank) {
-                  moveBuffer[moveCount++] = position::Move(i, target, false, isEp, position::Piece::QUEEN);
-                  moveBuffer[moveCount++] = position::Move(i, target, false, isEp, position::Piece::ROOK);
-                  moveBuffer[moveCount++] = position::Move(i, target, false, isEp, position::Piece::BISHOP);
-                  moveBuffer[moveCount++] = position::Move(i, target, false, isEp, position::Piece::KNIGHT);
-                  for (int k = moveCount - 4; k < moveCount; k++) moveBuffer[k].setCapture();
-               } else {
-                  moveBuffer[moveCount++] = position::Move(i, target, false, isEp);
-                  moveBuffer[moveCount - 1].setCapture();
-               }
+    void MoveGenerator::emitMovesFromBitboard(position::Bitboard targets, int fromSquare) {
+        while (targets) {
+            int to = position::popLsbIndex(targets);
+            position::Bitboard toBBb = position::bitBoardOf(to);
+
+            position::Move& m = moveBuffer[moveCount++];
+            m = position::Move(fromSquare, to);
+            if (toBBb & oppositeBB) m.setCapture();
+        }
+    }
+
+    void MoveGenerator::generateCastlingMoves(const position::Position& pos) {
+        bool white = friendlyColor == position::Piece::WHITE;
+        position::Bitboard occ = pos.byColor[0] | pos.byColor[1];
+        position::Bitboard kingBBb = friendlyBB & pos.byType[position::Piece::KING];
+        if (!kingBBb) return;
+        int kingSq = position::lsb(kingBBb);
+
+        if (white) {
+            if (kingSq != 4) return;
+
+            if ((pos.castlingRights & position::Position::WHITE_KINGSIDE) &&
+                (occ & (position::bitBoardOf(5) | position::bitBoardOf(6))) == 0 &&
+                (friendlyBB & position::bitBoardOf(7))) {
+                moveBuffer[moveCount++] = position::Move(4, 6, true);
             }
-         }
-      }
-   }
 
-   void MoveGenerator::generateKnightMoves(const position::Position& pos) {
-      for (int p = 0; p < 64; p++) {
-         int piece = pos.squares[p];
-         if (!position::Piece::isType(piece, position::Piece::KNIGHT)) continue;
-         if (!position::Piece::isColor(piece, friendlyColor)) continue;
+            if ((pos.castlingRights & position::Position::WHITE_QUEENSIDE) &&
+                (occ & (position::bitBoardOf(1) | position::bitBoardOf(2) | position::bitBoardOf(3))) == 0 &&
+                (friendlyBB & position::bitBoardOf(0))) {
+                moveBuffer[moveCount++] = position::Move(4, 2, true);
+            }
+        } else {
+            if (kingSq != 60) return;
 
-         int rank = p / 8;
-         int file = p % 8;
+            if ((pos.castlingRights & position::Position::BLACK_KINGSIDE) &&
+                (occ & (position::bitBoardOf(61) | position::bitBoardOf(62))) == 0 &&
+                (friendlyBB & position::bitBoardOf(63))) {
+                moveBuffer[moveCount++] = position::Move(60, 62, true);
+            }
 
-         for (int m = 0; m < 8; m++) {
-            int targetRank = rank + PMD::knightRankOffsets[m];
-            int targetFile = file + PMD::knightFileOffsets[m];
-            if (targetRank < 0 || targetRank > 7 || targetFile < 0 || targetFile > 7) continue;
+            if ((pos.castlingRights & position::Position::BLACK_QUEENSIDE) &&
+                (occ & (position::bitBoardOf(57) | position::bitBoardOf(58) | position::bitBoardOf(59))) == 0 &&
+                (friendlyBB & position::bitBoardOf(56))) {
+                moveBuffer[moveCount++] = position::Move(60, 58, true);
+            }
+        }
+    }
 
-            int target = p + PMD::knightOffsets[m];
-            if (position::Piece::isColor(pos.squares[target], friendlyColor)) continue;
+    bool MoveGenerator::isSquareAttacked(const position::Position& pos, int square, int attackerColor) {
+        int attackerIdx = colorIndex(attackerColor);
+        position::Bitboard occ = pos.byColor[0] | pos.byColor[1];
+        position::Bitboard attBB = pos.byColor[attackerIdx];
 
-            moveBuffer[moveCount++] = position::Move(p, target);
-            if (pos.squares[target] != position::Piece::NONE) moveBuffer[moveCount - 1].setCapture();
-         }
-      }
-   }
+        if (AttackTables::pawnAttacks[1 ^ attackerIdx][square] & attBB & pos.byType[position::Piece::PAWN])
+            return true;
+        if (AttackTables::knightAttacks[square] & attBB & pos.byType[position::Piece::KNIGHT])
+            return true;
+        if (AttackTables::kingAttacks[square] & attBB & pos.byType[position::Piece::KING])
+            return true;
 
-   void MoveGenerator::generateKingMoves(const position::Position& pos) {
-      for (int p = 0; p < 64; p++) {
-         int piece = pos.squares[p];
-         if (!position::Piece::isType(piece, position::Piece::KING)) continue;
-         if (!position::Piece::isColor(piece, friendlyColor)) continue;
+        position::Bitboard rookAndQueen = attBB & (pos.byType[position::Piece::ROOK] | pos.byType[position::Piece::QUEEN]);
+        position::Bitboard bishopAndQueen = attBB & (pos.byType[position::Piece::BISHOP] | pos.byType[position::Piece::QUEEN]);
 
-         int rank = p / 8;
-         int file = p % 8;
+        if (Magics::rookAttacks(square, occ) & rookAndQueen)
+            return true;
+        if (Magics::bishopAttacks(square, occ) & bishopAndQueen)
+            return true;
 
-         for (int d = 0; d < 8; d++) {
-            int target = p + PMD::directionOffsets[d];
-            if (target < 0 || target > 63) continue;
-
-            int tRank = target / 8;
-            int tFile = target % 8;
-            if (std::abs(tRank - rank) > 1 || std::abs(tFile - file) > 1) continue;
-
-            if (position::Piece::isColor(pos.squares[target], friendlyColor)) continue;
-
-            moveBuffer[moveCount++] = position::Move(p, target);
-            if (pos.squares[target] != position::Piece::NONE) moveBuffer[moveCount - 1].setCapture();
-         }
-      }
-   }
-
-   void MoveGenerator::generateCastlingMoves(const position::Position& pos) {
-      if (friendlyColor == position::Piece::WHITE) {
-         int kingSquare = 60;
-         if (pos.squares[kingSquare] != position::Piece::WHITE + position::Piece::KING) return;
-
-         if ((pos.castlingRights & position::Position::WHITE_KINGSIDE) &&
-             pos.squares[61] == position::Piece::NONE &&
-             pos.squares[62] == position::Piece::NONE) {
-            moveBuffer[moveCount++] = position::Move(kingSquare, 62, true);
-         }
-
-         if ((pos.castlingRights & position::Position::WHITE_QUEENSIDE) &&
-             pos.squares[59] == position::Piece::NONE &&
-             pos.squares[58] == position::Piece::NONE &&
-             pos.squares[57] == position::Piece::NONE) {
-            moveBuffer[moveCount++] = position::Move(kingSquare, 58, true);
-         }
-      } else {
-         int kingSquare = 4;
-         if (pos.squares[kingSquare] != position::Piece::BLACK + position::Piece::KING) return;
-
-         if ((pos.castlingRights & position::Position::BLACK_KINGSIDE) &&
-             pos.squares[5] == position::Piece::NONE &&
-             pos.squares[6] == position::Piece::NONE) {
-            moveBuffer[moveCount++] = position::Move(kingSquare, 6, true);
-         }
-
-         if ((pos.castlingRights & position::Position::BLACK_QUEENSIDE) &&
-             pos.squares[3] == position::Piece::NONE &&
-             pos.squares[2] == position::Piece::NONE &&
-             pos.squares[1] == position::Piece::NONE) {
-            moveBuffer[moveCount++] = position::Move(kingSquare, 2, true);
-         }
-      }
-   }
-
-   bool MoveGenerator::isSquareAttacked(const position::Position& pos, int square, int attackerColor) {
-      if (square < 0) return true;
-      int rank = square / 8;
-      int file = square % 8;
-
-      if (attackerColor == position::Piece::WHITE) {
-         if (rank <= 6) {
-            if (file > 0 && pos.squares[square + 7] == position::Piece::WHITE + position::Piece::PAWN) return true;
-            if (file < 7 && pos.squares[square + 9] == position::Piece::WHITE + position::Piece::PAWN) return true;
-         }
-      } else {
-         if (rank >= 1) {
-            if (file > 0 && pos.squares[square - 9] == position::Piece::BLACK + position::Piece::PAWN) return true;
-            if (file < 7 && pos.squares[square - 7] == position::Piece::BLACK + position::Piece::PAWN) return true;
-         }
-      }
-
-      for (int m = 0; m < 8; m++) {
-         int targetRank = rank + PMD::knightRankOffsets[m];
-         int targetFile = file + PMD::knightFileOffsets[m];
-         if (targetRank < 0 || targetRank > 7 || targetFile < 0 || targetFile > 7) continue;
-
-         int target = square + PMD::knightOffsets[m];
-         if (pos.squares[target] == attackerColor + position::Piece::KNIGHT) return true;
-      }
-
-      for (int d = 0; d < 8; d++) {
-         int target = square + PMD::directionOffsets[d];
-         if (target < 0 || target > 63) continue;
-
-         int tRank = target / 8;
-         int tFile = target % 8;
-         if (std::abs(tRank - rank) > 1 || std::abs(tFile - file) > 1) continue;
-
-         if (pos.squares[target] == attackerColor + position::Piece::KING) return true;
-      }
-
-      for (int d = 0; d < 8; d++) {
-         for (int n = 0; n < PMD::numSquaresToEdge[square][d]; n++) {
-            int target = square + PMD::directionOffsets[d] * (n + 1);
-            int piece = pos.squares[target];
-            if (piece == position::Piece::NONE) continue;
-
-            if (!position::Piece::isColor(piece, attackerColor)) break;
-
-            int type = position::Piece::getPieceType(piece);
-            if (type == position::Piece::QUEEN) return true;
-            if (d < 4 && type == position::Piece::ROOK) return true;
-            if (d >= 4 && type == position::Piece::BISHOP) return true;
-            break;
-         }
-      }
-
-      return false;
-   }
+        return false;
+    }
 }

@@ -1,5 +1,7 @@
 #pragma once
 #include <string>
+#include <cstdint>
+#include "Bitboard.h"
 
 namespace position {
     class Position {
@@ -11,26 +13,31 @@ namespace position {
 
         Position();
         Position(const std::string& fen);
-        Position(const Position& position);
-        Position& operator=(const Position& position);
-
-        ~Position();
-
+        Position(const Position&) = default;
+        Position& operator=(const Position&) = default;
 
         bool turn() const;
         void flipTurn();
+
         int castlingRights;
         int enPassantSquare;
 
-        int whiteKingSquare;
-        int blackKingSquare;
+        Bitboard byColor[2];   // [0] = white, [1] = black
+        Bitboard byType[7];    // indexed by Piece::PAWN..KING (1..6), [0] unused
 
-        int squares[64];
+        Bitboard occupancy() const { return byColor[0] | byColor[1]; }
+        Bitboard pieces(Bitboard colorBB, int type) const { return colorBB & byType[type]; }
+
+        int whiteKingSquare() const { return lsb(byColor[0] & byType[6]); }
+        int blackKingSquare() const { return lsb(byColor[1] & byType[6]); }
+        int kingSquare(int colorIndex) const;
+
+        static int colorToIndex(Bitboard colorMask);
 
     private:
         void loadFen(const std::string& fen);
         int fenSquareToIndex(const std::string& square) const;
 
-        int colorToMove;
+        int colorToMove; // 0 = white, 1 = black
     };
 }

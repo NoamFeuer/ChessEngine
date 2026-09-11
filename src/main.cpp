@@ -6,7 +6,7 @@
 int main() {
     std::cout << "WELCOME TO MY CHESS ENGINE!" << std::endl;
 
-    position::Position pos("r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10 ");
+    position::Position pos("8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1 ");
 
     auto pseudoWhite = moveGeneration::MoveGenerator::generatePseudoLegalMoves(pos);
     auto legalWhite = moveGeneration::MoveGenerator::generateLegalMoves(pos);
@@ -24,7 +24,7 @@ int main() {
     std::cout << "Black legal moves: " << legalBlack.size() << std::endl;
 
     std::cout << "\nPerft (validated) from the initial position:" << std::endl;
-    for (int depth = 1; depth <= 4; depth++) {
+    for (int depth = 1; depth <= 6; depth++) {
         std::cout << "  depth " << depth << ": " << moveGeneration::MoveGenerator::perft(pos, depth) << std::endl;
     }
 

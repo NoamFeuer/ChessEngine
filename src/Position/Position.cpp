@@ -1,5 +1,4 @@
 #include <stdexcept>
-#include <algorithm>
 #include <cctype>
 #include <sstream>
 
@@ -8,41 +7,33 @@
 
 namespace position {
     Position::Position() {
-       loadFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        loadFen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
     }
 
     Position::Position(const std::string& fen) {
         loadFen(fen);
     }
 
-    Position::Position(const Position& position) {
-        std::copy(position.squares, position.squares + 64, squares);
-        colorToMove = position.turn() ? Piece::WHITE : Piece::BLACK;
-        castlingRights = position.castlingRights;
-        enPassantSquare = position.enPassantSquare;
-        whiteKingSquare = position.whiteKingSquare;
-        blackKingSquare = position.blackKingSquare;
+    int Position::colorToIndex(Bitboard colorMask) {
+        return colorMask == 16 ? WHITE_INDEX : BLACK_INDEX;
     }
 
-    Position &Position::operator=(const Position& position) {
-        if (this != &position) {
-            std::copy(position.squares, position.squares + 64, squares);
-            colorToMove = position.turn() ? Piece::WHITE : Piece::BLACK;
-            castlingRights = position.castlingRights;
-            enPassantSquare = position.enPassantSquare;
-            whiteKingSquare = position.whiteKingSquare;
-            blackKingSquare = position.blackKingSquare;
-        }
-
-        return *this;
+    int Position::kingSquare(int colorIndex) const {
+        return lsb(byColor[colorIndex] & byType[6]);
     }
 
-    Position::~Position() {
-
+    bool Position::turn() const {
+        return colorToMove == WHITE_INDEX;
     }
 
-    void Position::loadFen(const std::string &fen) {
-        int index = 0;
+    void Position::flipTurn() {
+        colorToMove ^= 1;
+    }
+
+    void Position::loadFen(const std::string& fen) {
+        byColor[0] = 0;
+        byColor[1] = 0;
+        for (auto& bb : byType) bb = 0;
 
         std::istringstream stream(fen);
         std::string board;
@@ -52,48 +43,40 @@ namespace position {
 
         stream >> board >> sideToMove >> castle >> ep;
 
+        int rank = 7;
+        int file = 0;
+
         for (char c : board) {
-            if (c == '/') continue;
-
-            if (isdigit(c)) {
-                for (int i = 0; i < c - '0'; i++) {
-                    squares[index] = Piece::NONE;
-                    index++;
-                }
-
+            if (c == '/') {
+                rank--;
+                file = 0;
                 continue;
             }
 
-            int piece = islower(c) ? Piece::BLACK : Piece::WHITE;
-
-            switch (tolower(c)) {
-                case 'p':
-                    piece += Piece::PAWN;
-                    break;
-                case 'n':
-                    piece += Piece::KNIGHT;
-                    break;
-                case 'b':
-                    piece += Piece::BISHOP;
-                    break;
-                case 'r':
-                    piece += Piece::ROOK;
-                    break;
-                case 'q':
-                    piece += Piece::QUEEN;
-                    break;
-                case 'k':
-                    piece += Piece::KING;
-                    break;
-                default:
-                    throw std::invalid_argument("Invalid FEN! Not a valid character");
+            if (isdigit(static_cast<unsigned char>(c))) {
+                file += c - '0';
+                continue;
             }
 
-            squares[index] = piece;
-            index++;
+            int colorIndex = islower(static_cast<unsigned char>(c)) ? BLACK_INDEX : WHITE_INDEX;
+
+            int type;
+            switch (tolower(static_cast<unsigned char>(c))) {
+                case 'p': type = Piece::PAWN; break;
+                case 'n': type = Piece::KNIGHT; break;
+                case 'b': type = Piece::BISHOP; break;
+                case 'r': type = Piece::ROOK; break;
+                case 'q': type = Piece::QUEEN; break;
+                case 'k': type = Piece::KING; break;
+                default: throw std::invalid_argument("Invalid FEN! Not a valid character");
+            }
+
+            byColor[colorIndex] |= bitBoardOf(squareOf(rank, file));
+            byType[type] |= bitBoardOf(squareOf(rank, file));
+            file++;
         }
 
-        colorToMove = (sideToMove == "w") ? Piece::WHITE : Piece::BLACK;
+        colorToMove = (sideToMove == "w") ? WHITE_INDEX : BLACK_INDEX;
 
         castlingRights = 0;
         if (castle.find('K') != std::string::npos) castlingRights |= WHITE_KINGSIDE;
@@ -102,26 +85,11 @@ namespace position {
         if (castle.find('q') != std::string::npos) castlingRights |= BLACK_QUEENSIDE;
 
         enPassantSquare = (ep == "-") ? -1 : fenSquareToIndex(ep);
-
-        whiteKingSquare = -1;
-        blackKingSquare = -1;
-        for (int i = 0; i < 64; i++) {
-            if (squares[i] == Piece::WHITE + Piece::KING) whiteKingSquare = i;
-            else if (squares[i] == Piece::BLACK + Piece::KING) blackKingSquare = i;
-        }
     }
 
     int Position::fenSquareToIndex(const std::string& square) const {
         int file = square[0] - 'a';
         int rank = square[1] - '1';
-        return (7 - rank) * 8 + file;
-    }
-
-    bool Position::turn() const {
-        return (colorToMove == Piece::WHITE);
-    }
-
-    void Position::flipTurn() {
-        colorToMove = (colorToMove == Piece::WHITE) ? Piece::BLACK : Piece::WHITE;
+        return rank * 8 + file;
     }
 }

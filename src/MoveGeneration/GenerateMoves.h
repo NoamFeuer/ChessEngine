@@ -27,10 +27,10 @@ namespace moveGeneration {
         static void applyMove(position::Position& pos, const position::Move& move);
 
     private:
-        static void generateSlidingMoves(const position::Position& pos, int startSquare, int piece);
         static void generatePawnMoves(const position::Position& pos);
         static void generateKnightMoves(const position::Position& pos);
         static void generateKingMoves(const position::Position& pos);
+        static void generateSlidingMoves(const position::Position& pos, int startSquare, int piece);
         static void generateCastlingMoves(const position::Position& pos);
 
         static bool isSquareAttacked(const position::Position& pos, int square, int attackerColor);
@@ -40,6 +40,10 @@ namespace moveGeneration {
 
         static int friendlyColor;
         static int oppositeColor;
+        static position::Bitboard friendlyBB;
+        static position::Bitboard oppositeBB;
 
+        static void emitMovesFromBitboard(position::Bitboard targets, int fromSquare);
+        static void addPromoMoves(int from, int to, bool capture);
     };
 }
