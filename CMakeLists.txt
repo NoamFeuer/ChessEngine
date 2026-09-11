@@ -11,6 +11,5 @@ add_executable(ChessEngine src/main.cpp
         src/MoveGeneration/GenerateMoves.cpp
         src/MoveGeneration/GenerateMoves.h
         src/Position/Move.h
-        src/Position/Move.cpp
         src/MoveGeneration/PMD.cpp
         src/MoveGeneration/PMD.h)

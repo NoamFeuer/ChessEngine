@@ -1,19 +1,26 @@
 #include "GenerateMoves.h"
 
 #include <cstdlib>
+#include <cstring>
 
 #include "PMD.h"
 #include "../Position/Piece.h"
 
 namespace moveGeneration {
+   static_assert(sizeof(position::Move) == 4, "Move must be packed into 4 bytes");
+
    position::Move MoveGenerator::moveBuffer[256];
    int MoveGenerator::moveCount{};
    int MoveGenerator::friendlyColor{};
    int MoveGenerator::oppositeColor{};
 
    std::vector<position::Move> MoveGenerator::generatePseudoLegalMoves(const position::Position& pos) {
-      std::vector<position::Move> moves;
+      position::Move moves[256];
+      int n = generatePseudoLegalMoves(pos, moves);
+      return std::vector<position::Move>(moves, moves + n);
+   }
 
+   int MoveGenerator::generatePseudoLegalMoves(const position::Position& pos, position::Move* outMoves) {
       moveCount = 0;
       friendlyColor = (pos.turn()) ? position::Piece::WHITE : position::Piece::BLACK;
       oppositeColor = (pos.turn()) ? position::Piece::BLACK : position::Piece::WHITE;
@@ -36,53 +43,175 @@ namespace moveGeneration {
       generateKingMoves(pos);
       generateCastlingMoves(pos);
 
-      for (int i = 0; i < moveCount; i++) {
-         moves.push_back(moveBuffer[i]);
-      }
-
-      return moves;
+      std::memcpy(outMoves, moveBuffer, moveCount * sizeof(position::Move));
+      return moveCount;
    }
 
    std::vector<position::Move> MoveGenerator::generateLegalMoves(const position::Position& pos) {
-      std::vector<position::Move> pseudo = generatePseudoLegalMoves(pos);
-      std::vector<position::Move> legal;
+      position::Move moves[256];
+      position::Position work(pos);
+      int n = generateLegalMoves(work, moves);
+      return std::vector<position::Move>(moves, moves + n);
+   }
 
-      for (const position::Move& move : pseudo) {
-         if (move.castle) {
-            int kingSquare = findKingSquare(pos, friendlyColor);
-            if (isSquareAttacked(pos, kingSquare, oppositeColor)) continue;
+   int MoveGenerator::generateLegalMoves(position::Position& pos, position::Move* outMoves) {
+      position::Move pseudo[256];
+      int pseudoCount = generatePseudoLegalMoves(pos, pseudo);
 
-            bool kingSide = (move.toSquare % 8) == 6;
-            int throughSquare = kingSide ? kingSquare + 1 : kingSquare - 1;
-            int destSquare = kingSide ? kingSquare + 2 : kingSquare - 2;
+      if (pos.whiteKingSquare < 0 || pos.blackKingSquare < 0) return 0;
+
+      int legalCount = 0;
+      for (int i = 0; i < pseudoCount; i++) {
+         const position::Move& mv = pseudo[i];
+         if (mv.castle()) {
+            int ks = friendlyColor == position::Piece::WHITE ? pos.whiteKingSquare : pos.blackKingSquare;
+            if (isSquareAttacked(pos, ks, oppositeColor)) continue;
+
+            bool kingSide = (mv.toSquare() % 8) == 6;
+            int throughSquare = kingSide ? ks + 1 : ks - 1;
+            int destSquare = kingSide ? ks + 2 : ks - 2;
             if (isSquareAttacked(pos, throughSquare, oppositeColor)) continue;
             if (isSquareAttacked(pos, destSquare, oppositeColor)) continue;
          }
 
-         position::Position copy(pos);
-         applyMove(copy, move);
-         if (findKingSquare(copy, oppositeColor) < 0) continue;
-         int ourKing = findKingSquare(copy, friendlyColor);
-         if (!isSquareAttacked(copy, ourKing, oppositeColor)) {
-            legal.push_back(move);
-         }
+         if (mv.toSquare() == pos.whiteKingSquare || mv.toSquare() == pos.blackKingSquare) continue;
+
+         UndoInfo undo;
+         makeMove(pos, mv, undo);
+         int ks = friendlyColor == position::Piece::WHITE ? pos.whiteKingSquare : pos.blackKingSquare;
+         bool legal = !isSquareAttacked(pos, ks, oppositeColor);
+         unmakeMove(pos, mv, undo);
+
+         if (legal) outMoves[legalCount++] = mv;
       }
 
-      return legal;
+      return legalCount;
    }
 
-   std::uint64_t MoveGenerator::perft(const position::Position& pos, int depth) {
-      std::vector<position::Move> moves = generateLegalMoves(pos);
-      if (depth <= 1) return moves.size();
+   std::uint64_t MoveGenerator::perft(position::Position& pos, int depth) {
+      if (depth <= 1) {
+         position::Move moves[256];
+         return generateLegalMoves(pos, moves);
+      }
+
+      position::Move moves[256];
+      int count = generateLegalMoves(pos, moves);
 
       std::uint64_t nodes = 0;
-      for (const position::Move& move : moves) {
-         position::Position copy(pos);
-         applyMove(copy, move);
-         nodes += perft(copy, depth - 1);
+      for (int i = 0; i < count; i++) {
+         UndoInfo undo;
+         makeMove(pos, moves[i], undo);
+         nodes += perft(pos, depth - 1);
+         unmakeMove(pos, moves[i], undo);
       }
 
       return nodes;
+   }
+
+   void MoveGenerator::makeMove(position::Position& pos, const position::Move& move, UndoInfo& undo) {
+      undo.movedPiece = pos.squares[move.fromSquare()];
+      undo.capturedPiece = pos.squares[move.toSquare()];
+      undo.enPassantSquare = pos.enPassantSquare;
+      undo.castlingRights = pos.castlingRights;
+
+      int color = position::Piece::getPieceColor(undo.movedPiece);
+      int type  = position::Piece::getPieceType(undo.movedPiece);
+
+      pos.squares[move.toSquare()] = undo.movedPiece;
+      pos.squares[move.fromSquare()] = position::Piece::NONE;
+
+      if (move.enPassant()) {
+         int capturedPawnSquare = move.toSquare() + ((color == position::Piece::WHITE) ? 8 : -8);
+         undo.capturedPiece = pos.squares[capturedPawnSquare];
+         pos.squares[capturedPawnSquare] = position::Piece::NONE;
+      }
+
+      if (move.promotion() != position::Piece::NONE) {
+         pos.squares[move.toSquare()] = color + move.promotion();
+      }
+
+      if (move.castle()) {
+         if (move.toSquare() % 8 == 6) {
+            pos.squares[move.toSquare() - 1] = color + position::Piece::ROOK;
+            pos.squares[move.toSquare() + 1] = position::Piece::NONE;
+         } else {
+            pos.squares[move.toSquare() + 1] = color + position::Piece::ROOK;
+            pos.squares[move.toSquare() - 2] = position::Piece::NONE;
+         }
+      }
+
+      if (type == position::Piece::PAWN && std::abs(move.toSquare() - move.fromSquare()) == 16) {
+         pos.enPassantSquare = move.fromSquare() + ((color == position::Piece::WHITE) ? -8 : 8);
+      } else {
+         pos.enPassantSquare = -1;
+      }
+
+      if (type == position::Piece::KING) {
+         if (color == position::Piece::WHITE) {
+            pos.castlingRights &= ~(position::Position::WHITE_KINGSIDE | position::Position::WHITE_QUEENSIDE);
+         } else {
+            pos.castlingRights &= ~(position::Position::BLACK_KINGSIDE | position::Position::BLACK_QUEENSIDE);
+         }
+      }
+
+      if (move.fromSquare() == 56 || move.toSquare() == 56) pos.castlingRights &= ~position::Position::WHITE_QUEENSIDE;
+      if (move.fromSquare() == 63 || move.toSquare() == 63) pos.castlingRights &= ~position::Position::WHITE_KINGSIDE;
+      if (move.fromSquare() == 0  || move.toSquare() == 0)  pos.castlingRights &= ~position::Position::BLACK_QUEENSIDE;
+      if (move.fromSquare() == 7  || move.toSquare() == 7)  pos.castlingRights &= ~position::Position::BLACK_KINGSIDE;
+
+      if (type == position::Piece::KING) {
+         if (color == position::Piece::WHITE) pos.whiteKingSquare = move.toSquare();
+         else pos.blackKingSquare = move.toSquare();
+      }
+
+      pos.flipTurn();
+   }
+
+   void MoveGenerator::unmakeMove(position::Position& pos, const position::Move& move, const UndoInfo& undo) {
+      int color = position::Piece::getPieceColor(undo.movedPiece);
+      int type  = position::Piece::getPieceType(undo.movedPiece);
+
+      pos.squares[move.fromSquare()] = undo.movedPiece;
+
+      if (move.castle()) {
+         if (move.toSquare() % 8 == 6) {
+            pos.squares[move.toSquare() - 1] = position::Piece::NONE;
+            pos.squares[move.toSquare() + 1] = color + position::Piece::ROOK;
+         } else {
+            pos.squares[move.toSquare() + 1] = position::Piece::NONE;
+            pos.squares[move.toSquare() - 2] = color + position::Piece::ROOK;
+         }
+      }
+
+      pos.squares[move.toSquare()] = undo.capturedPiece;
+
+      if (move.enPassant()) {
+         int capturedPawnSquare = move.toSquare() + ((color == position::Piece::WHITE) ? 8 : -8);
+         pos.squares[capturedPawnSquare] = undo.capturedPiece;
+         pos.squares[move.toSquare()] = position::Piece::NONE;
+      }
+
+      if (type == position::Piece::KING) {
+         if (color == position::Piece::WHITE) pos.whiteKingSquare = move.fromSquare();
+         else pos.blackKingSquare = move.fromSquare();
+      }
+
+      if (position::Piece::getPieceType(undo.capturedPiece) == position::Piece::KING) {
+         if (position::Piece::getPieceColor(undo.capturedPiece) == position::Piece::WHITE) {
+            pos.whiteKingSquare = move.toSquare();
+         } else {
+            pos.blackKingSquare = move.toSquare();
+         }
+      }
+
+      pos.enPassantSquare = undo.enPassantSquare;
+      pos.castlingRights = undo.castlingRights;
+      pos.flipTurn();
+   }
+
+   void MoveGenerator::applyMove(position::Position& pos, const position::Move& move) {
+      UndoInfo discard;
+      makeMove(pos, move, discard);
    }
 
    void MoveGenerator::generateSlidingMoves(const position::Position& pos, int startSquare, int piece) {
@@ -97,7 +226,7 @@ namespace moveGeneration {
             if (position::Piece::isColor(pieceOnTargetSquare, friendlyColor)) break;
 
             moveBuffer[moveCount++] = position::Move(startSquare, targetSquare);
-            if (pieceOnTargetSquare != position::Piece::NONE) moveBuffer[moveCount - 1].capture = true;
+            if (pieceOnTargetSquare != position::Piece::NONE) moveBuffer[moveCount - 1].setCapture();
 
             if (position::Piece::isColor(pieceOnTargetSquare, oppositeColor)) break;
          }
@@ -151,10 +280,10 @@ namespace moveGeneration {
                   moveBuffer[moveCount++] = position::Move(i, target, false, isEp, position::Piece::ROOK);
                   moveBuffer[moveCount++] = position::Move(i, target, false, isEp, position::Piece::BISHOP);
                   moveBuffer[moveCount++] = position::Move(i, target, false, isEp, position::Piece::KNIGHT);
-                  for (int k = moveCount - 4; k < moveCount; k++) moveBuffer[k].capture = true;
+                  for (int k = moveCount - 4; k < moveCount; k++) moveBuffer[k].setCapture();
                } else {
                   moveBuffer[moveCount++] = position::Move(i, target, false, isEp);
-                  moveBuffer[moveCount - 1].capture = true;
+                  moveBuffer[moveCount - 1].setCapture();
                }
             }
          }
@@ -179,7 +308,7 @@ namespace moveGeneration {
             if (position::Piece::isColor(pos.squares[target], friendlyColor)) continue;
 
             moveBuffer[moveCount++] = position::Move(p, target);
-            if (pos.squares[target] != position::Piece::NONE) moveBuffer[moveCount - 1].capture = true;
+            if (pos.squares[target] != position::Piece::NONE) moveBuffer[moveCount - 1].setCapture();
          }
       }
    }
@@ -204,7 +333,7 @@ namespace moveGeneration {
             if (position::Piece::isColor(pos.squares[target], friendlyColor)) continue;
 
             moveBuffer[moveCount++] = position::Move(p, target);
-            if (pos.squares[target] != position::Piece::NONE) moveBuffer[moveCount - 1].capture = true;
+            if (pos.squares[target] != position::Piece::NONE) moveBuffer[moveCount - 1].setCapture();
          }
       }
    }
@@ -243,18 +372,6 @@ namespace moveGeneration {
             moveBuffer[moveCount++] = position::Move(kingSquare, 2, true);
          }
       }
-   }
-
-   int MoveGenerator::findKingSquare(const position::Position& pos, int color) {
-      for (int i = 0; i < 64; i++) {
-         int piece = pos.squares[i];
-         if (position::Piece::isType(piece, position::Piece::KING) &&
-             position::Piece::isColor(piece, color)) {
-            return i;
-         }
-      }
-
-      return -1;
    }
 
    bool MoveGenerator::isSquareAttacked(const position::Position& pos, int square, int attackerColor) {
@@ -311,54 +428,5 @@ namespace moveGeneration {
       }
 
       return false;
-   }
-
-   void MoveGenerator::applyMove(position::Position& pos, const position::Move& move) {
-      int piece = pos.squares[move.fromSquare];
-      int type = position::Piece::getPieceType(piece);
-      int color = position::Piece::getPieceColor(piece);
-
-      pos.squares[move.toSquare] = piece;
-      pos.squares[move.fromSquare] = position::Piece::NONE;
-
-      if (move.enPassant) {
-         int capturedPawnSquare = move.toSquare + ((color == position::Piece::WHITE) ? 8 : -8);
-         pos.squares[capturedPawnSquare] = position::Piece::NONE;
-      }
-
-      if (move.promotion != position::Piece::NONE) {
-         pos.squares[move.toSquare] = color + move.promotion;
-      }
-
-      if (move.castle) {
-         if (move.toSquare % 8 == 6) {
-            pos.squares[move.toSquare - 1] = color + position::Piece::ROOK;
-            pos.squares[move.toSquare + 1] = position::Piece::NONE;
-         } else {
-            pos.squares[move.toSquare + 1] = color + position::Piece::ROOK;
-            pos.squares[move.toSquare - 2] = position::Piece::NONE;
-         }
-      }
-
-      if (type == position::Piece::PAWN && std::abs(move.toSquare - move.fromSquare) == 16) {
-         pos.enPassantSquare = move.fromSquare + ((color == position::Piece::WHITE) ? -8 : 8);
-      } else {
-         pos.enPassantSquare = -1;
-      }
-
-      if (type == position::Piece::KING) {
-         if (color == position::Piece::WHITE) {
-            pos.castlingRights &= ~(position::Position::WHITE_KINGSIDE | position::Position::WHITE_QUEENSIDE);
-         } else {
-            pos.castlingRights &= ~(position::Position::BLACK_KINGSIDE | position::Position::BLACK_QUEENSIDE);
-         }
-      }
-
-      if (move.fromSquare == 56 || move.toSquare == 56) pos.castlingRights &= ~position::Position::WHITE_QUEENSIDE;
-      if (move.fromSquare == 63 || move.toSquare == 63) pos.castlingRights &= ~position::Position::WHITE_KINGSIDE;
-      if (move.fromSquare == 0  || move.toSquare == 0)  pos.castlingRights &= ~position::Position::BLACK_QUEENSIDE;
-      if (move.fromSquare == 7  || move.toSquare == 7)  pos.castlingRights &= ~position::Position::BLACK_KINGSIDE;
-
-      pos.flipTurn();
    }
 }

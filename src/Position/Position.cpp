@@ -20,6 +20,8 @@ namespace position {
         colorToMove = position.turn() ? Piece::WHITE : Piece::BLACK;
         castlingRights = position.castlingRights;
         enPassantSquare = position.enPassantSquare;
+        whiteKingSquare = position.whiteKingSquare;
+        blackKingSquare = position.blackKingSquare;
     }
 
     Position &Position::operator=(const Position& position) {
@@ -28,6 +30,8 @@ namespace position {
             colorToMove = position.turn() ? Piece::WHITE : Piece::BLACK;
             castlingRights = position.castlingRights;
             enPassantSquare = position.enPassantSquare;
+            whiteKingSquare = position.whiteKingSquare;
+            blackKingSquare = position.blackKingSquare;
         }
 
         return *this;
@@ -98,6 +102,13 @@ namespace position {
         if (castle.find('q') != std::string::npos) castlingRights |= BLACK_QUEENSIDE;
 
         enPassantSquare = (ep == "-") ? -1 : fenSquareToIndex(ep);
+
+        whiteKingSquare = -1;
+        blackKingSquare = -1;
+        for (int i = 0; i < 64; i++) {
+            if (squares[i] == Piece::WHITE + Piece::KING) whiteKingSquare = i;
+            else if (squares[i] == Piece::BLACK + Piece::KING) blackKingSquare = i;
+        }
     }
 
     int Position::fenSquareToIndex(const std::string& square) const {

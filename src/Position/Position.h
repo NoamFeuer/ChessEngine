@@ -22,6 +22,9 @@ namespace position {
         int castlingRights;
         int enPassantSquare;
 
+        int whiteKingSquare;
+        int blackKingSquare;
+
         int squares[64];
 
     private:

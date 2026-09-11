@@ -5,12 +5,25 @@
 #include "../Position/Position.h"
 
 namespace moveGeneration {
+    struct UndoInfo {
+        int movedPiece;
+        int capturedPiece;
+        int enPassantSquare;
+        int castlingRights;
+    };
+
     class MoveGenerator {
     public:
         static std::vector<position::Move> generatePseudoLegalMoves(const position::Position& pos);
-        static std::vector<position::Move> generateLegalMoves(const position::Position& pos);
+        static int generatePseudoLegalMoves(const position::Position& pos, position::Move* outMoves);
 
-        static std::uint64_t perft(const position::Position& pos, int depth);
+        static std::vector<position::Move> generateLegalMoves(const position::Position& pos);
+        static int generateLegalMoves(position::Position& pos, position::Move* outMoves);
+
+        static std::uint64_t perft(position::Position& pos, int depth);
+
+        static void makeMove(position::Position& pos, const position::Move& move, UndoInfo& undo);
+        static void unmakeMove(position::Position& pos, const position::Move& move, const UndoInfo& undo);
         static void applyMove(position::Position& pos, const position::Move& move);
 
     private:
@@ -20,7 +33,6 @@ namespace moveGeneration {
         static void generateKingMoves(const position::Position& pos);
         static void generateCastlingMoves(const position::Position& pos);
 
-        static int findKingSquare(const position::Position& pos, int color);
         static bool isSquareAttacked(const position::Position& pos, int square, int attackerColor);
 
         static position::Move moveBuffer[256];

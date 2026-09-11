@@ -11,11 +11,7 @@ int main() {
     auto pseudoWhite = moveGeneration::MoveGenerator::generatePseudoLegalMoves(pos);
     auto legalWhite = moveGeneration::MoveGenerator::generateLegalMoves(pos);
 
-    std::cout << "White pseudo-legal moves: " << pseudoWhite.size() << std::endl;
-    for (const auto& m : pseudoWhite) {
-        std::cout << "  from=" << m.fromSquare << " to=" << m.toSquare
-                  << " castle=" << m.castle << " ep=" << m.enPassant << " prom=" << m.promotion << std::endl;
-    }
+    std::cout << "White pseudo-legal moves: " << pseudoWhite.size() << std::endl; 
     std::cout << "White legal moves: " << legalWhite.size() << std::endl;
 
     position::Position blackPos(pos);
