@@ -22,8 +22,8 @@ namespace position {
         int castlingRights;
         int enPassantSquare;
 
-        Bitboard byColor[2];   // [0] = white, [1] = black
-        Bitboard byType[7];    // indexed by Piece::PAWN..KING (1..6), [0] unused
+        Bitboard byColor[2]; // [0] = white, [1] = black
+        Bitboard byType[7];  // indexed by Piece::PAWN..KING (1..6), [0] unused
 
         Bitboard occupancy() const { return byColor[0] | byColor[1]; }
         Bitboard pieces(Bitboard colorBB, int type) const { return colorBB & byType[type]; }

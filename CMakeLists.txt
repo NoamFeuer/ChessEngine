@@ -17,7 +17,10 @@ add_library(chesscore STATIC
 target_include_directories(chesscore PUBLIC src)
 
 # Main executable
-add_executable(ChessEngine src/main.cpp)
+add_executable(ChessEngine
+    src/main.cpp
+    src/Search/Search.cpp
+)
 target_link_libraries(ChessEngine PRIVATE chesscore)
 
 # Perft test suite

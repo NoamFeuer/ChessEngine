@@ -64,13 +64,13 @@ int main() {
         cases++;
         position::Position pos(c.fen);
         std::uint64_t got = moveGeneration::MoveGenerator::perft(pos, c.depth);
+
         if (got != c.expected) {
-            std::printf("FAIL %s depth %d: expected %llu, got %llu\n",
-                        c.fen, c.depth, c.expected, got);
+            std::printf("FAIL %s depth %d: expected %llu, got %llu\n", c.fen, c.depth, c.expected, got);
             failures++;
-        } else {
-            std::printf("ok   %s depth %d: %llu\n", c.fen, c.depth, got);
         }
+        else
+            std::printf("ok   %s depth %d: %llu\n", c.fen, c.depth, got);
     }
 
     std::printf("\n%d/%d perft cases passed\n", cases - failures, cases);

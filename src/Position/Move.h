@@ -15,12 +15,29 @@ namespace position {
                    (static_cast<std::uint32_t>(promotion) << 15);
         }
 
-        int fromSquare() const { return static_cast<int>(data & 63u); }
-        int toSquare()  const { return static_cast<int>((data >> 6) & 63u); }
-        bool capture()  const { return (data >> 12) & 1u; }
-        bool castle()   const { return (data >> 13) & 1u; }
-        bool enPassant() const { return (data >> 14) & 1u; }
-        int promotion() const { return static_cast<int>((data >> 15) & 7u); }
+        int fromSquare() const {
+            return static_cast<int>(data & 63u);
+        }
+
+        int toSquare() const {
+            return static_cast<int>((data >> 6) & 63u);
+        }
+
+        bool capture() const {
+            return (data >> 12) & 1u;
+        }
+
+        bool castle() const {
+            return (data >> 13) & 1u;
+        }
+
+        bool enPassant() const {
+            return (data >> 14) & 1u;
+        }
+
+        int promotion() const {
+            return static_cast<int>((data >> 15) & 7u);
+        }
 
         void setCapture() { data |= 1u << 12; }
     };

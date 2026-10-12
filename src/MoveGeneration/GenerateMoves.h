@@ -26,14 +26,14 @@ namespace moveGeneration {
         static void unmakeMove(position::Position& pos, const position::Move& move, const UndoInfo& undo);
         static void applyMove(position::Position& pos, const position::Move& move);
 
+        static bool isSquareAttacked(const position::Position& pos, int square, int attackerColor);
+
     private:
         static void generatePawnMoves(const position::Position& pos);
         static void generateKnightMoves(const position::Position& pos);
         static void generateKingMoves(const position::Position& pos);
         static void generateSlidingMoves(const position::Position& pos, int startSquare, int piece);
         static void generateCastlingMoves(const position::Position& pos);
-
-        static bool isSquareAttacked(const position::Position& pos, int square, int attackerColor);
 
         static position::Move moveBuffer[256];
         static int moveCount;

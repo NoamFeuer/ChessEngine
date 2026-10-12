@@ -1,5 +1,4 @@
 #pragma once
-#include <cstdint>
 
 namespace position {
     using Bitboard = std::uint64_t;

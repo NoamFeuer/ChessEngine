@@ -32,9 +32,11 @@ namespace moveGeneration {
             for (auto& [dr, df] : offsets) {
                 int nr = r + dr;
                 int nf = f + df;
+
                 if (isOnBoard(nr, nf))
                     bb |= position::bitBoardOf(position::squareOf(nr, nf));
             }
+
             knightAttacks[sq] = bb;
         }
     }
@@ -54,9 +56,11 @@ namespace moveGeneration {
             for (auto& [dr, df] : offsets) {
                 int nr = r + dr;
                 int nf = f + df;
+
                 if (isOnBoard(nr, nf))
                     bb |= position::bitBoardOf(position::squareOf(nr, nf));
             }
+
             kingAttacks[sq] = bb;
         }
     }
