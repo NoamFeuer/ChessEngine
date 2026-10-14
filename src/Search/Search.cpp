@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 #include "../MoveGeneration/GenerateMoves.h"
 #include "../Position/Piece.h"
@@ -12,6 +13,9 @@ namespace search {
 
     constexpr int INF = 1'000'000;
     constexpr int MATE_SCORE = 100'000;
+    constexpr size_t TT_SIZE = 1 << 20;
+
+    std::vector<TTEntry> tt(TT_SIZE);
 
     constexpr std::array<int, 7> PIECE_VALUES = {
         0,   // NONE
@@ -22,6 +26,29 @@ namespace search {
         900, // QUEEN
         0    // KING
     };
+
+    TTEntry* probeTT(uint64_t key) {
+        TTEntry& entry = tt[key & (TT_SIZE - 1)];
+
+        if (entry.valid && entry.key == key)
+            return &entry;
+
+        return nullptr;
+    }
+
+    void storeTT(uint64_t key, position::Move bestMove, int score, int depth, Bound bound) {
+        TTEntry& entry = tt[key & (TT_SIZE - 1)];
+
+        // Replace empty entries, matching positions, or entries that are no deeper than this search.
+        if (!entry.valid || entry.key == key || depth >= entry.depth) {
+            entry.key = key;
+            entry.bestMove = bestMove;
+            entry.score = score;
+            entry.depth = depth;
+            entry.bound = bound;
+            entry.valid = true;
+        }
+    }
 
     int evaluate(const position::Position& pos) {
         int score = 0;
@@ -50,6 +77,8 @@ namespace search {
         return pos.turn() ? score : -score;
     }
 
+
+
     int negamax(position::Position& pos, int depth, int alpha, int beta, int ply, std::uint64_t& nodes) {
         ++nodes;
 
@@ -72,6 +101,28 @@ namespace search {
 
         if (depth == 0)
             return evaluate(pos);
+
+        const uint64_t key = pos.zorbistHash();
+        const int alphaOriginal = alpha;
+
+        position::Move ttMove{};
+
+        if (TTEntry* entry = probeTT(key)) {
+            ttMove = entry->bestMove;
+
+            if (entry->depth >= depth) {
+                const int score = entry->score;
+
+                if (entry->bound == Bound::EXACT)
+                    return score;
+
+                if (entry->bound == Bound::LOWER && score >= beta)
+                    return score;
+
+                if (entry->bound == Bound::UPPER && score <= alpha)
+                    return score;
+            }
+        }
 
         // Simple move ordering: captures first.
         std::stable_sort(moves, moves + count,

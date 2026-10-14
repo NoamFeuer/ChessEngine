@@ -1,4 +1,5 @@
 #pragma once
+
 #include <string>
 #include <cstdint>
 #include "Bitboard.h"
@@ -31,6 +32,7 @@ namespace position {
         int whiteKingSquare() const { return lsb(byColor[0] & byType[6]); }
         int blackKingSquare() const { return lsb(byColor[1] & byType[6]); }
         int kingSquare(int colorIndex) const;
+        uint64_t zorbistHash() const;
 
         static int colorToIndex(Bitboard colorMask);
 
@@ -38,6 +40,6 @@ namespace position {
         void loadFen(const std::string& fen);
         int fenSquareToIndex(const std::string& square) const;
 
-        int colorToMove; // 0 = white, 1 = black
+        int colorToMove;
     };
 }

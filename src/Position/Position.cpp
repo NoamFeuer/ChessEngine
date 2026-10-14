@@ -2,6 +2,7 @@
 #include <cctype>
 #include <sstream>
 
+#include "ZorbistKeys.h"
 #include "Position.h"
 #include "Piece.h"
 
@@ -91,5 +92,36 @@ namespace position {
         int file = square[0] - 'a';
         int rank = square[1] - '1';
         return rank * 8 + file;
+    }
+
+    uint64_t Position::zorbistHash() const {
+        uint64_t hash = 0;
+
+        for (int color = 0; color < 2; color++) {
+            for (int type = Piece::PAWN; type <= Piece::KING; type++) {
+                Bitboard bb = byColor[color] & byType[type];
+
+                while (bb) {
+                    int square = lsb(bb);
+
+                    int pieceIndex = color * 6 + (type - 1);
+                    hash ^= zobristKeys.pieces[pieceIndex][square];
+
+                    bb &= bb - 1;
+                }
+            }
+        }
+
+        if (colorToMove == BLACK_INDEX)
+            hash ^= zobristKeys.sideToMove;
+
+        hash ^= zobristKeys.castling[castlingRights];
+
+        if (enPassantSquare != -1) {
+            int file = enPassantSquare % 8;
+            hash ^= zobristKeys.enPassant[file];
+        }
+
+        return hash;
     }
 }
