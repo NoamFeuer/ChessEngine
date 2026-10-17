@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <cctype>
+#include <chrono>
 
 #include "Position/Position.h"
 #include "Position/Piece.h"
@@ -11,7 +12,7 @@
 using namespace position;
 using namespace moveGeneration;
 
-constexpr int SEARCH_DEPTH = 4;
+constexpr int SEARCH_DEPTH = 6;
 
 // Convert a square index (0-63) to chess notation.
 std::string squareToString(int square) {
@@ -187,10 +188,13 @@ int main() {
             MoveGenerator::applyMove(pos, move);
         }
         else {
-            // Bot plays Black.
             std::cout << "Bot is thinking...\n";
 
+            const auto start = std::chrono::steady_clock::now();
             search::SearchResult result = search::findBestMove(pos, SEARCH_DEPTH);
+
+            const auto end = std::chrono::steady_clock::now();
+            const auto thinkingTime = std::chrono::duration<double>(end - start).count();
 
             std::cout << "Bot plays " << squareToString(result.bestMove.fromSquare()) << squareToString(result.bestMove.toSquare());
 
@@ -207,7 +211,7 @@ int main() {
                 std::cout << promo;
             }
 
-            std::cout << "\nEvaluation: " << result.score << "\nNodes searched: " << result.nodes << '\n';
+            std::cout << "\nEvaluation: " << result.score << "\nNodes searched: " << result.nodes << "\nThinking time: " << thinkingTime << " seconds\n";
 
             MoveGenerator::applyMove(pos, result.bestMove);
         }

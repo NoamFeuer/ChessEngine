@@ -7,6 +7,10 @@ namespace position {
 
         Move() = default;
 
+        bool operator==(const Move& other) const {
+            return data == other.data;
+        }
+
         Move(int fromSquare, int toSquare, bool castle = false, bool enPassant = false, int promotion = 0) {
             data = static_cast<std::uint32_t>(fromSquare) |
                    (static_cast<std::uint32_t>(toSquare) << 6) |

@@ -25,5 +25,5 @@ namespace search {
         bool valid = false;
     };
 
-    SearchResult findBestMove(position::Position& pos, int depth);
+    SearchResult findBestMove(position::Position& pos, int maxDepth, int timeLimitMs = 1000);
 }
